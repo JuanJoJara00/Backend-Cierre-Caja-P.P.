@@ -88,6 +88,138 @@ const DRIVE_PARENT_FOLDER_ID = CFG.DRIVE_PARENT_FOLDER_ID;
 const ALLOWED_SEDES = (CFG.ALLOWED_SEDES || '').split(',').map(s => s.trim()).filter(Boolean);
 const SUPABASE_URL = CFG.SUPABASE_URL || '';
 const SUPABASE_SERVICE_ROLE = CFG.SUPABASE_SERVICE_ROLE || '';
+const SHEET_NAMES = {
+  GASTOS_CAJA: CFG.SHEET_GASTOS_CAJA || 'GASTOS CAJA',
+  GASTOS: CFG.SHEET_GASTOS || 'GASTOS',
+  NOMINA: CFG.SHEET_NOMINA || 'NOMINA',
+  MYS: CFG.SHEET_MYS || 'MYSINVENTARIOS',
+  SIIGO: CFG.SHEET_SIIGO || 'SIIGO',
+  FXP: CFG.SHEET_FACTURAS || 'FACTURAS X PAGAR'
+};
+const GASTOS_TOTAL_HEADERS = parseHeaderList_(CFG.GASTOS_TOTAL_HEADERS, ['Ahorro', 'PropinaEntregada', 'Domicilio', 'OtrosGastos']);
+const NOMINA_TOTAL_HEADERS = parseHeaderList_(CFG.NOMINA_TOTAL_HEADERS, ['TotalNomina']);
+
+function _norm_(s) {
+  return String(s || '')
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/[\s\.\-_]+/g, '')
+    .toLowerCase();
+}
+
+function parseHeaderList_(raw, fallback) {
+  if (!raw) return fallback.slice();
+  try {
+    if (Array.isArray(raw)) return raw.filter(Boolean).map(String);
+    if (typeof raw === 'string') {
+      if (raw.trim().startsWith('[')) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) return parsed.filter(Boolean).map(String);
+      }
+      return raw.split(',').map(s => s.trim()).filter(Boolean);
+    }
+  } catch (err) {}
+  return fallback.slice();
+}
+
+const ALIASES = {
+  'GASTOS CAJA': {
+    Fecha: 'Fecha',
+    Sede: 'Sede',
+    Turno: 'Turno',
+    Encargado: 'Encargado',
+    Observaciones: 'Observaciones',
+    Ahorro: 'Ahorro',
+    PropinaEntregada: 'Propina Entregada',
+    Domicilio: 'Domicilio',
+    OtrosGastos: 'Otros Gastos',
+    DetalleOtrosGastos: 'Detalle Otros Gastos'
+  },
+  'GASTOS': {
+    Fecha: 'Fecha',
+    Sede: 'Sede',
+    Turno: 'Turno',
+    Encargado: 'Encargado',
+    Observaciones: 'Observaciones',
+    Ahorro: 'Ahorro',
+    PropinaEntregada: 'Propina Entregada',
+    Domicilio: 'Domicilio',
+    OtrosGastos: 'Otros Gastos',
+    DetalleOtrosGastos: 'Detalle Otros Gastos'
+  },
+  'NOMINA': {
+    Fecha: 'Fecha',
+    Sede: 'Sede',
+    Turno: 'Turno',
+    Encargado: 'Encargado',
+    Observaciones: 'Observaciones',
+    Empleado: 'Empleado',
+    Salario: 'Salario',
+    Transporte: 'Transporte',
+    Extras: 'Extras',
+    TotalNomina: 'Total Nomina'
+  },
+  'MYSINVENTARIOS': {
+    Fecha: 'Fecha',
+    Sede: 'Sede',
+    Turno: 'Turno',
+    Encargado: 'Encargado',
+    Observaciones: 'Observaciones',
+    CobroEfectivo: 'Cobro Efectivo',
+    TotalEfectivoReal: 'Total Efectivo Real',
+    EfectivoParaEntregar: 'Efectivo Para Entregar',
+    SobroOFalto: 'Sobro o Falto',
+    TotalVenta: 'Total Venta',
+    CierreMys: 'Cierre MYS',
+    GastosTurno: 'Gastos Turno',
+    NominaTurno: 'Nomina Turno',
+    TotalAfectaciones: 'Total Afectaciones',
+    Adjuntos: 'Adjuntos'
+  },
+  'SIIGO': {
+    Fecha: 'Fecha',
+    Sede: 'Sede',
+    Turno: 'Turno',
+    Encargado: 'Encargado',
+    Observaciones: 'Observaciones',
+    SinEfectivoSiigo: 'Sin Efectivo',
+    CobroEfectivo: 'Cobro Efectivo',
+    TotalEfectivoReal: 'Total Efectivo Real',
+    EfectivoParaEntregar: 'Efectivo Para Entregar',
+    SobroOFalto: 'Sobro o Falto',
+    TarjetasVouchers: 'Tarjetas/Vouchers',
+    CierreDatafono: 'Cierre Datafono',
+    DifDatafono: 'Dif Datafono',
+    Transferencia: 'Transferencia',
+    TotalVenta: 'Total Venta',
+    CierreSiigo: 'Cierre SIIGO',
+    GastosTurno: 'Gastos Turno',
+    NominaTurno: 'Nomina Turno',
+    TotalAfectaciones: 'Total Afectaciones',
+    Adjuntos: 'Adjuntos'
+  },
+  'FACTURAS X PAGAR': {
+    Fecha: 'Fecha',
+    Sede: 'Sede',
+    Turno: 'Turno',
+    Encargado: 'Encargado',
+    Observaciones: 'Observaciones',
+    Proveedor: 'Proveedor',
+    NumFactura: 'Num Factura',
+    ValorFactura: 'Valor Factura',
+    Categoria: 'Categoria',
+    Adjuntos: 'Adjuntos'
+  }
+};
+
+function getAliasForSheetName_(sheetName) {
+  if (!sheetName) return {};
+  if (ALIASES[sheetName]) return ALIASES[sheetName];
+  const targetNorm = _norm_(sheetName);
+  for (const key in ALIASES) {
+    if (_norm_(key) === targetNorm) return ALIASES[key];
+  }
+  return {};
+}
 
 /** ───────── Utilidad: logo como data:url (prioriza archivo Drive) */
 function getBrandLogoDataUrl_() {
@@ -196,20 +328,23 @@ function json_(o) {
 
 function computeTotals_(Fecha, Sede, Turno) {
   const ss = SpreadsheetApp.openById(SHEET_ID);
-  const gastosSheet = ss.getSheetByName('GASTOS CAJA') || ss.getSheetByName('GASTOS');
-  const nominaSheet = ss.getSheetByName('NOMINA');
+  const gastosSheet = ss.getSheetByName(SHEET_NAMES.GASTOS_CAJA) || ss.getSheetByName(SHEET_NAMES.GASTOS);
+  const nominaSheet = ss.getSheetByName(SHEET_NAMES.NOMINA);
+
+  const gastosAlias = gastosSheet ? getAliasForSheetName_(gastosSheet.getName()) : {};
+  const nominaAlias = nominaSheet ? getAliasForSheetName_(nominaSheet.getName()) : {};
 
   const gastos = sumByFST_(
     gastosSheet,
-    ['Fecha', 'Sede', 'Turno'],
-    ['Ahorro', 'PropinaEntregada', 'Domicilio', 'OtrosGastos'],
+    ['Fecha', 'Sede', 'Turno'].map(k => gastosAlias[k] || k),
+    GASTOS_TOTAL_HEADERS.map(k => gastosAlias[k] || k),
     Fecha, Sede, Turno
   );
 
   const nomina = sumByFST_(
     nominaSheet,
-    ['Fecha', 'Sede', 'Turno'],
-    ['TotalNomina', 'Total', 'total'],
+    ['Fecha', 'Sede', 'Turno'].map(k => nominaAlias[k] || k),
+    NOMINA_TOTAL_HEADERS.map(k => nominaAlias[k] || k),
     Fecha, Sede, Turno
   );
 
@@ -219,7 +354,7 @@ function computeTotals_(Fecha, Sede, Turno) {
 
 function sumByFST_(sheet, keyHeaders, sumHeaders, Fecha, Sede, Turno) {
   if (!sheet) return 0;
-  const { headerMap, values } = getTable_(sheet);
+  const { headerMap, values } = getHeaderMapStrict_(sheet);
   const idx = keyHeaders.map(h => headerMap[h] ?? -1);
   const sumIdx = sumHeaders.map(h => headerMap[h]).filter(i => i >= 0);
   if (idx.some(i => i < 0) || !sumIdx.length) return 0;
@@ -242,7 +377,7 @@ function sumByFST_(sheet, keyHeaders, sumHeaders, Fecha, Sede, Turno) {
 
 function handleMYS_(p, meta) {
   const adjUrls = DriveService.saveBatchBase64_(
-    { sede: p.Sede, tipo: 'MYSINVENTARIOS', fecha: p.Fecha, turno: p.Turno },
+    { sede: p.Sede, tipo: SHEET_NAMES.MYS, fecha: p.Fecha, turno: p.Turno },
     p.AdjMYSINV
   );
 
@@ -258,7 +393,12 @@ function handleMYS_(p, meta) {
     Adjuntos: (adjUrls || []).join(' | ')
   };
 
-  const rowIdx = SheetsService.appendRowsDetectingHeaders_('MYSINVENTARIOS', [row]);
+  const totals = computeTotals_(p.Fecha, p.Sede, p.Turno);
+  row.GastosTurno = totals.gastosTurno;
+  row.NominaTurno = totals.nominaTurno;
+  row.TotalAfectaciones = totals.totalAfectaciones;
+
+  const rowIdx = SheetsService.appendRowsDetectingHeaders_(SHEET_NAMES.MYS, [row]);
 
   // Supabase (opcional)
   try {
@@ -277,18 +417,20 @@ function handleMYS_(p, meta) {
   } catch (err) { log_('SUPABASE_MYS_ERROR', meta, { err: String(err) }); }
 
   log_('MYS_INSERT', meta, row);
-  return { ok: true, sheet: 'MYSINVENTARIOS', rowIdx };
+  return { ok: true, sheet: SHEET_NAMES.MYS, rowIdx, totals };
 }
 
 function handleSIIGO_(p, meta) {
   const adjUrls = DriveService.saveBatchBase64_(
-    { sede: p.Sede, tipo: 'SIIGO', fecha: p.Fecha, turno: p.Turno },
+    { sede: p.Sede, tipo: SHEET_NAMES.SIIGO, fecha: p.Fecha, turno: p.Turno },
     p.AdjSIIGO
   );
 
   const sinEf = !!p.SinEfectivoSiigo;
   const cobro = sinEf ? 0 : (+p.CobroEfectivo || 0);
   const entreg = sinEf ? 0 : (+p.EfectivoParaEntregar || 0);
+
+  const totals = computeTotals_(p.Fecha, p.Sede, p.Turno);
 
   const row = {
     Fecha: p.Fecha, Sede: p.Sede, Turno: p.Turno,
@@ -304,10 +446,13 @@ function handleSIIGO_(p, meta) {
     Transferencia: +p.Transferencia || 0,
     TotalVenta: +p.TotalVenta || 0,
     CierreSiigo: +p.CierreSiigo || 0,
+    GastosTurno: totals.gastosTurno,
+    NominaTurno: totals.nominaTurno,
+    TotalAfectaciones: totals.totalAfectaciones,
     Adjuntos: (adjUrls || []).join(' | ')
   };
 
-  const rowIdx = SheetsService.appendRowsDetectingHeaders_('SIIGO', [row]);
+  const rowIdx = SheetsService.appendRowsDetectingHeaders_(SHEET_NAMES.SIIGO, [row]);
 
   try {
     SupabaseService.insertMany_('cierres_siigo', [{
@@ -330,7 +475,7 @@ function handleSIIGO_(p, meta) {
   } catch (err) { log_('SUPABASE_SIIGO_ERROR', meta, { err: String(err) }); }
 
   log_('SIIGO_INSERT', meta, row);
-  return { ok: true, sheet: 'SIIGO', rowIdx };
+  return { ok: true, sheet: SHEET_NAMES.SIIGO, rowIdx, totals };
 }
 
 function handleGASTOS_(p, meta) {
@@ -345,7 +490,8 @@ function handleGASTOS_(p, meta) {
     DetalleOtrosGastos: p.DetalleOtrosGastos ? JSON.stringify(p.DetalleOtrosGastos) : ''
   };
 
-  const rowIdx = SheetsService.appendRowsDetectingHeaders_('GASTOS CAJA', [row]);
+  const rowIdx = SheetsService.appendRowsDetectingHeaders_(SHEET_NAMES.GASTOS_CAJA, [row]);
+  const totals = computeTotals_(p.Fecha, p.Sede, p.Turno);
 
   try {
     SupabaseService.insertMany_('gastos', [{
@@ -359,13 +505,14 @@ function handleGASTOS_(p, meta) {
   } catch (err) { log_('SUPABASE_GASTOS_ERROR', meta, { err: String(err) }); }
 
   log_('GASTOS_INSERT', meta, row);
-  return { ok: true, sheet: 'GASTOS CAJA', rowIdx };
+  return { ok: true, sheet: SHEET_NAMES.GASTOS_CAJA, rowIdx, totals };
 }
 
 function handleNOMINA_(p, meta) {
   if (p.SinPagoNomina) {
     log_('NOMINA_SIN_PAGO', meta, {});
-    return { ok: true, sheet: 'NOMINA', rowIdx: '-' };
+    const totals = computeTotals_(p.Fecha, p.Sede, p.Turno);
+    return { ok: true, sheet: SHEET_NAMES.NOMINA, rowIdx: '-', totals };
   }
 
   const entries = Array.isArray(p.NominaEntries) ? p.NominaEntries : [];
@@ -381,7 +528,8 @@ function handleNOMINA_(p, meta) {
     TotalNomina: +en.TotalNomina || ((+en.Salario || 0) + (+en.Transporte || 0) + (+en.Extras || 0))
   }));
 
-  const rowIdx = SheetsService.appendRowsDetectingHeaders_('NOMINA', rows);
+  const rowIdx = SheetsService.appendRowsDetectingHeaders_(SHEET_NAMES.NOMINA, rows);
+  const totals = computeTotals_(p.Fecha, p.Sede, p.Turno);
 
   try {
     SupabaseService.insertMany_('nomina', rows.map(r => ({
@@ -394,20 +542,20 @@ function handleNOMINA_(p, meta) {
   } catch (err) { log_('SUPABASE_NOMINA_ERROR', meta, { err: String(err) }); }
 
   log_('NOMINA_INSERTADAS', meta, { count: rows.length });
-  return { ok: true, sheet: 'NOMINA', rowIdx };
+  return { ok: true, sheet: SHEET_NAMES.NOMINA, rowIdx, totals };
 }
 
 function handleFXP_(p, meta) {
   if (p.SinFXP) {
     log_('FXP_SIN_REGISTROS', meta, {});
-    return { ok: true, sheet: 'FACTURAS X PAGAR', rowIdx: '-' };
+    return { ok: true, sheet: SHEET_NAMES.FXP, rowIdx: '-' };
   }
 
   const entries = Array.isArray(p.FXPEntries) ? p.FXPEntries : [];
   if (!entries.length) throw new Error('FXP sin entries');
 
   const adjUrls = DriveService.saveBatchBase64_(
-    { sede: p.Sede, tipo: 'FACTURAS X PAGAR', fecha: p.Fecha, turno: p.Turno },
+    { sede: p.Sede, tipo: SHEET_NAMES.FXP, fecha: p.Fecha, turno: p.Turno },
     p.AdjFXP
   );
 
@@ -421,7 +569,7 @@ function handleFXP_(p, meta) {
     Adjuntos: (adjUrls || []).join(' | ')
   }));
 
-  const rowIdx = SheetsService.appendRowsDetectingHeaders_('FACTURAS X PAGAR', rows);
+  const rowIdx = SheetsService.appendRowsDetectingHeaders_(SHEET_NAMES.FXP, rows);
 
   try {
     SupabaseService.insertMany_('fxp', rows.map(r => ({
@@ -434,7 +582,7 @@ function handleFXP_(p, meta) {
   } catch (err) { log_('SUPABASE_FXP_ERROR', meta, { err: String(err) }); }
 
   log_('FXP_INSERTADAS', meta, { count: rows.length });
-  return { ok: true, sheet: 'FACTURAS X PAGAR', rowIdx };
+  return { ok: true, sheet: SHEET_NAMES.FXP, rowIdx };
 }
 
 /** ───────── Sheets utils ───────── */
@@ -443,56 +591,57 @@ const SheetsService = {
   appendRowsDetectingHeaders_: function (sheetName, rows) {
     if (!rows || !rows.length) throw new Error('No hay filas a insertar');
     const ss = SpreadsheetApp.openById(SHEET_ID);
-    const sh = ss.getSheetByName(sheetName) || ss.insertSheet(sheetName);
-    const keys = Object.keys(rows[0]);
-    const { headerMap } = ensureHeaders_(sh, keys);
+    const sh = ss.getSheetByName(sheetName);
+    if (!sh) {
+      throw new Error('La hoja "' + sheetName + '" no existe en el Spreadsheet configurado');
+    }
 
+    const { header, headerMap, normMap } = getHeaderMapStrict_(sh);
+    if (!header.length || header.every(h => !String(h || '').trim())) {
+      throw new Error('La hoja "' + sheetName + '" no tiene encabezados definidos');
+    }
+
+    const alias = getAliasForSheetName_(sheetName);
     const data = rows.map(r => {
-      const arr = Array(Object.keys(headerMap).length).fill('');
-      for (const k in r) {
-        const i = headerMap[k];
-        if (i >= 0) arr[i] = r[k];
-      }
+      const arr = Array(header.length).fill('');
+      Object.keys(r || {}).forEach(k => {
+        const value = r[k];
+        const targetHeader = alias[k];
+        if (targetHeader !== undefined && headerMap[targetHeader] !== undefined) {
+          arr[headerMap[targetHeader]] = value;
+          return;
+        }
+        const guessIdx = normMap[_norm_(k)];
+        if (guessIdx !== undefined) {
+          arr[guessIdx] = value;
+        }
+      });
       return arr;
     });
 
     const startRow = Math.max(2, sh.getLastRow() + 1);
-    sh.getRange(startRow, 1, data.length, data[0].length).setValues(data);
+    sh.getRange(startRow, 1, data.length, header.length).setValues(data);
     return startRow;
   }
 };
 
-function getTable_(sheet) {
-  const rng = sheet.getDataRange();
-  const values = rng.getValues();
-  const header = (values[0] || []).map(x => String(x || ''));
-  const headerMap = {};
-  header.forEach((h, i) => headerMap[h] = i);
-  return { header, headerMap, values };
-}
-
-function ensureHeaders_(sh, keys) {
+function getHeaderMapStrict_(sh) {
   const rng = sh.getDataRange();
   const values = rng.getValues();
-  if (values.length === 0) {
-    sh.getRange(1, 1, 1, keys.length).setValues([keys]);
-    return { header: keys, headerMap: Object.fromEntries(keys.map((k, i) => [k, i])) };
-    }
+  if (!values.length) {
+    return { header: [], headerMap: {}, normMap: {}, values: [] };
+  }
+
   const header = (values[0] || []).map(x => String(x || ''));
-  const map = {};
-  header.forEach((h, i) => map[h] = i);
+  if (header.every(h => !String(h || '').trim())) {
+    return { header: [], headerMap: {}, normMap: {}, values };
+  }
+  const headerMap = {};
+  header.forEach((h, i) => { headerMap[h] = i; });
+  const normMap = {};
+  header.forEach((h, i) => { normMap[_norm_(h)] = i; });
 
-  let changed = false;
-  keys.forEach(k => {
-    if (map[k] === undefined) {
-      header.push(k);
-      map[k] = header.length - 1;
-      changed = true;
-    }
-  });
-
-  if (changed) sh.getRange(1, 1, 1, header.length).setValues([header]);
-  return { header, headerMap: map };
+  return { header, headerMap, normMap, values };
 }
 
 /** ───────── Drive utils (guardar adjuntos base64 en carpeta por sede/tipo/AÑO-MES) ───────── */
