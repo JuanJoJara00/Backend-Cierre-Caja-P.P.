@@ -77,116 +77,158 @@ function addExpense(data) {
     by: data.by || data.responsable
   };
 
-  requireFields_(normalized, ['date', 'time', 'site', 'shift', 'category', 'description', 'amount', 'by']);
+/** ───────── Totales (Gastos + Nómina por Fecha, Sede, Turno) */
 
-  const sheet = getSheetByName(SHEET_GASTOS);
-  const row = [
-    normalized.date,
-    normalized.time,
-    normalized.site,
-    toNumber_(normalized.shift),
-    normalized.category,
-    normalized.description,
-    toNumber_(normalized.amount),
-    normalized.by,
-    formatTimestamp(normalized.date, normalized.time)
-  ];
+function computeTotals_(Fecha, Sede, Turno) {
+  const ss = SpreadsheetApp.openById(SHEET_ID);
+  const gastosSheet = ss.getSheetByName(SHEET_NAMES.GASTOS_CAJA) || ss.getSheetByName(SHEET_NAMES.GASTOS);
+  const nominaSheet = ss.getSheetByName(SHEET_NAMES.NOMINA);
 
-  const rowIndex = findLastRow(sheet) + 1;
-  sheet.getRange(rowIndex, 1, 1, row.length).setValues([row]);
+  const gastosAlias = gastosSheet ? getAliasForSheetName_(gastosSheet.getName()) : {};
+  const nominaAlias = nominaSheet ? getAliasForSheetName_(nominaSheet.getName()) : {};
 
-  return {
-    sheet: SHEET_GASTOS,
-    row: rowIndex,
-    gasto: {
-      fecha: normalized.date,
-      hora: normalized.time,
-      sede: normalized.site,
-      turno: toNumber_(normalized.shift),
-      categoria: normalized.category,
-      descripcion: normalized.description,
-      valor: toNumber_(normalized.amount),
-      responsable: normalized.by
+  const gastos = sumByFST_(
+    gastosSheet,
+    ['Fecha', 'Sede', 'Turno'].map(k => gastosAlias[k] || k),
+    GASTOS_TOTAL_HEADERS.map(k => gastosAlias[k] || k),
+    Fecha, Sede, Turno
+  );
+
+  const nomina = sumByFST_(
+    nominaSheet,
+    ['Fecha', 'Sede', 'Turno'].map(k => nominaAlias[k] || k),
+    NOMINA_TOTAL_HEADERS.map(k => nominaAlias[k] || k),
+    Fecha, Sede, Turno
+  );
+
+  const totalAfectaciones = gastos + nomina;
+  return { gastosTurno: gastos, nominaTurno: nomina, totalAfectaciones };
+}
+
+function sumByFST_(sheet, keyHeaders, sumHeaders, Fecha, Sede, Turno) {
+  if (!sheet) return 0;
+  const { headerMap, values } = getHeaderMapStrict_(sheet);
+  const idx = keyHeaders.map(h => headerMap[h] ?? -1);
+  const sumIdx = sumHeaders.map(h => headerMap[h]).filter(i => i >= 0);
+  if (idx.some(i => i < 0) || !sumIdx.length) return 0;
+
+  let sum = 0;
+  for (let i = 1; i < values.length; i++) {
+    const row = values[i];
+    if (
+      String(row[idx[0]] || '') === String(Fecha || '') &&
+      String(row[idx[1]] || '') === String(Sede || '') &&
+      String(row[idx[2]] || '') === String(Turno || '')
+    ) {
+      for (const j of sumIdx) sum += (+row[j] || 0);
     }
   };
 }
 
-function addPayroll(data) {
-  const normalized = {
-    date: data.date || data.fecha,
-    time: data.time || data.hora,
-    site: data.site || data.sede,
-    shift: data.shift !== undefined ? data.shift : data.turno,
-    employee: data.employee || data.empleado,
-    concept: data.concept || data.concepto,
-    amount: data.amount !== undefined ? data.amount : data.valor,
-    note: data.note || data.observacion
+/** ───────── Handlers por tipo ───────── */
+
+function handleMYS_(p, meta) {
+  const adjUrls = DriveService.saveBatchBase64_(
+    { sede: p.Sede, tipo: SHEET_NAMES.MYS, fecha: p.Fecha, turno: p.Turno },
+    p.AdjMYSINV
+  );
+
+  const row = {
+    Fecha: p.Fecha, Sede: p.Sede, Turno: p.Turno,
+    Encargado: p.Encargado || '', Observaciones: p.Observaciones || '',
+    CobroEfectivo: +p.CobroEfectivo || 0,
+    TotalEfectivoReal: +p.TotalEfectivoReal || 0,
+    EfectivoParaEntregar: +p.EfectivoParaEntregar || 0,
+    SobroOFalto: +p.SobroOFalto || 0,
+    TotalVenta: +p.TotalVenta || 0,
+    CierreMys: +p.CierreMys || 0,
+    Adjuntos: (adjUrls || []).join(' | ')
   };
 
-  requireFields_(normalized, ['date', 'time', 'site', 'shift', 'employee', 'concept', 'amount']);
+  const totals = computeTotals_(p.Fecha, p.Sede, p.Turno);
+  row.GastosTurno = totals.gastosTurno;
+  row.NominaTurno = totals.nominaTurno;
+  row.TotalAfectaciones = totals.totalAfectaciones;
 
-  const sheet = getSheetByName(SHEET_NOMINA);
-  const row = [
-    normalized.date,
-    normalized.time,
-    normalized.site,
-    toNumber_(normalized.shift),
-    normalized.employee,
-    normalized.concept,
-    toNumber_(normalized.amount),
-    normalized.note || '',
-    formatTimestamp(normalized.date, normalized.time)
-  ];
+  const rowIdx = SheetsService.appendRowsDetectingHeaders_(SHEET_NAMES.MYS, [row]);
 
-  const rowIndex = findLastRow(sheet) + 1;
-  sheet.getRange(rowIndex, 1, 1, row.length).setValues([row]);
+  // Supabase (opcional)
+  try {
+    SupabaseService.insertMany_('cierres_mys', [{
+      id: Utilities.getUuid(),
+      fecha: row.Fecha, sede: row.Sede, turno: row.Turno,
+      encargado: row.Encargado, observaciones: row.Observaciones,
+      cobro_efectivo: row.CobroEfectivo,
+      total_efectivo_real: row.TotalEfectivoReal,
+      efectivo_para_entregar: row.EfectivoParaEntregar,
+      sobro_o_falto: row.SobroOFalto,
+      total_venta: row.TotalVenta,
+      cierre_mys: row.CierreMys,
+      adjuntos: row.Adjuntos
+    }]);
+  } catch (err) { log_('SUPABASE_MYS_ERROR', meta, { err: String(err) }); }
 
-  return {
-    sheet: SHEET_NOMINA,
-    row: rowIndex,
-    nomina: {
-      fecha: normalized.date,
-      hora: normalized.time,
-      sede: normalized.site,
-      turno: toNumber_(normalized.shift),
-      empleado: normalized.employee,
-      concepto: normalized.concept,
-      valor: toNumber_(normalized.amount),
-      observacion: normalized.note || ''
-    }
-  };
+  log_('MYS_INSERT', meta, row);
+  return { ok: true, sheet: SHEET_NAMES.MYS, rowIdx, totals };
 }
 
-function calculateClosure(site, shift, efectivo, date) {
-  requireFields_({ site: site, shift: shift, cash: efectivo, date: date }, ['site', 'shift', 'cash', 'date']);
+function handleSIIGO_(p, meta) {
+  const adjUrls = DriveService.saveBatchBase64_(
+    { sede: p.Sede, tipo: SHEET_NAMES.SIIGO, fecha: p.Fecha, turno: p.Turno },
+    p.AdjSIIGO
+  );
 
-  const efectivoNumber = toNumber_(efectivo);
-  const shiftNumber = toNumber_(shift);
+  const sinEf = !!p.SinEfectivoSiigo;
+  const cobro = sinEf ? 0 : (+p.CobroEfectivo || 0);
+  const entreg = sinEf ? 0 : (+p.EfectivoParaEntregar || 0);
 
-  const gastosSheet = getSheetByName(SHEET_GASTOS);
-  const nominaSheet = getSheetByName(SHEET_NOMINA);
+  const totals = computeTotals_(p.Fecha, p.Sede, p.Turno);
 
-  const gastos = sumByCriteria_(gastosSheet, {
-    dateIndex: 0,
-    siteIndex: 2,
-    shiftIndex: 3,
-    amountIndex: 6,
-    date: date,
-    site: site,
-    shift: shiftNumber
-  });
+  const row = {
+    Fecha: p.Fecha, Sede: p.Sede, Turno: p.Turno,
+    Encargado: p.Encargado || '', Observaciones: p.Observaciones || '',
+    SinEfectivoSiigo: sinEf,
+    CobroEfectivo: cobro,
+    TotalEfectivoReal: +p.TotalEfectivoReal || 0,
+    EfectivoParaEntregar: entreg,
+    SobroOFalto: +p.SobroOFalto || 0,
+    TarjetasVouchers: +p.TarjetasVouchers || 0,
+    CierreDatafono: +p.CierreDatafono || 0,
+    DifDatafono: +p.DifDatafono || 0,
+    Transferencia: +p.Transferencia || 0,
+    TotalVenta: +p.TotalVenta || 0,
+    CierreSiigo: +p.CierreSiigo || 0,
+    GastosTurno: totals.gastosTurno,
+    NominaTurno: totals.nominaTurno,
+    TotalAfectaciones: totals.totalAfectaciones,
+    Adjuntos: (adjUrls || []).join(' | ')
+  };
 
-  const nomina = sumByCriteria_(nominaSheet, {
-    dateIndex: 0,
-    siteIndex: 2,
-    shiftIndex: 3,
-    amountIndex: 6,
-    date: date,
-    site: site,
-    shift: shiftNumber
-  });
+  const rowIdx = SheetsService.appendRowsDetectingHeaders_(SHEET_NAMES.SIIGO, [row]);
 
-  const saldoReal = efectivoNumber - gastos - nomina;
+  try {
+    SupabaseService.insertMany_('cierres_siigo', [{
+      id: Utilities.getUuid(),
+      fecha: row.Fecha, sede: row.Sede, turno: row.Turno,
+      encargado: row.Encargado, observaciones: row.Observaciones,
+      sin_efectivo: row.SinEfectivoSiigo,
+      cobro_efectivo: row.CobroEfectivo,
+      total_efectivo_real: row.TotalEfectivoReal,
+      efectivo_para_entregar: row.EfectivoParaEntregar,
+      sobro_o_falto: row.SobroOFalto,
+      tarjetas_vouchers: row.TarjetasVouchers,
+      cierre_datafono: row.CierreDatafono,
+      dif_datafono: row.DifDatafono,
+      transferencia: row.Transferencia,
+      total_venta: row.TotalVenta,
+      cierre_siigo: row.CierreSiigo,
+      adjuntos: row.Adjuntos
+    }]);
+  } catch (err) { log_('SUPABASE_SIIGO_ERROR', meta, { err: String(err) }); }
+
+  log_('SIIGO_INSERT', meta, row);
+  return { ok: true, sheet: SHEET_NAMES.SIIGO, rowIdx, totals };
+}
 
   return {
     turno: shiftNumber,
@@ -199,25 +241,29 @@ function calculateClosure(site, shift, efectivo, date) {
   };
 }
 
-function findLastRow(sheet) {
-  const lastRow = sheet.getLastRow();
-  if (lastRow === 0) {
-    return 0;
-  }
+  const rowIdx = SheetsService.appendRowsDetectingHeaders_(SHEET_NAMES.GASTOS_CAJA, [row]);
+  const totals = computeTotals_(p.Fecha, p.Sede, p.Turno);
 
-  const range = sheet.getRange(1, 1, lastRow, sheet.getLastColumn());
-  const values = range.getValues();
-  for (let i = values.length - 1; i >= 0; i--) {
-    if (values[i].some(cell => cell !== '' && cell !== null)) {
-      return i + 1;
-    }
-  }
-  return 0;
+  try {
+    SupabaseService.insertMany_('gastos', [{
+      id: Utilities.getUuid(),
+      fecha: row.Fecha, sede: row.Sede, turno: row.Turno,
+      encargado: row.Encargado, observaciones: row.Observaciones,
+      ahorro: row.Ahorro, propina_entregada: row.PropinaEntregada, domicilio: row.Domicilio,
+      otros_gastos: row.OtrosGastos,
+      detalle_otros_gastos: row.DetalleOtrosGastos ? JSON.parse(row.DetalleOtrosGastos) : null
+    }]);
+  } catch (err) { log_('SUPABASE_GASTOS_ERROR', meta, { err: String(err) }); }
+
+  log_('GASTOS_INSERT', meta, row);
+  return { ok: true, sheet: SHEET_NAMES.GASTOS_CAJA, rowIdx, totals };
 }
 
-function getSheetByName(name) {
-  if (!name) {
-    throw new Error('Nombre de hoja no definido');
+function handleNOMINA_(p, meta) {
+  if (p.SinPagoNomina) {
+    log_('NOMINA_SIN_PAGO', meta, {});
+    const totals = computeTotals_(p.Fecha, p.Sede, p.Turno);
+    return { ok: true, sheet: SHEET_NAMES.NOMINA, rowIdx: '-', totals };
   }
 
   const spreadsheet = getSpreadsheet_();
@@ -234,30 +280,28 @@ function formatTimestamp(dateStr, timeStr) {
       return new Date().toISOString();
     }
 
-    const dateParts = String(dateStr || '').split('-');
-    if (dateParts.length !== 3) {
-      return new Date().toISOString();
-    }
+  const rowIdx = SheetsService.appendRowsDetectingHeaders_(SHEET_NAMES.NOMINA, rows);
+  const totals = computeTotals_(p.Fecha, p.Sede, p.Turno);
 
-    const timeParts = String(timeStr || '00:00').split(':');
-    const year = parseInt(dateParts[0], 10);
-    const month = parseInt(dateParts[1], 10) - 1;
-    const day = parseInt(dateParts[2], 10);
-    const hours = parseInt(timeParts[0] || '0', 10);
-    const minutes = parseInt(timeParts[1] || '0', 10);
+  try {
+    SupabaseService.insertMany_('nomina', rows.map(r => ({
+      id: Utilities.getUuid(),
+      fecha: r.Fecha, sede: r.Sede, turno: r.Turno,
+      encargado: r.Encargado, observaciones: r.Observaciones,
+      empleado: r.Empleado, salario: r.Salario, transporte: r.Transporte, extras: r.Extras,
+      total: r.TotalNomina
+    })));
+  } catch (err) { log_('SUPABASE_NOMINA_ERROR', meta, { err: String(err) }); }
 
-    const date = new Date(year, month, day, hours, minutes);
-    return date.toISOString();
-  } catch (error) {
-    console.error('formatTimestamp error', error);
-    return new Date().toISOString();
+  log_('NOMINA_INSERTADAS', meta, { count: rows.length });
+  return { ok: true, sheet: SHEET_NAMES.NOMINA, rowIdx, totals };
+}
+
+function handleFXP_(p, meta) {
+  if (p.SinFXP) {
+    log_('FXP_SIN_REGISTROS', meta, {});
+    return { ok: true, sheet: SHEET_NAMES.FXP, rowIdx: '-' };
   }
-}
-
-function jsonOk(payload) {
-  const body = Object.assign({ ok: true }, payload && typeof payload === 'object' ? payload : { result: payload });
-  return createJsonResponse_(body);
-}
 
 function jsonError(code, message, details) {
   const error = {
@@ -268,65 +312,87 @@ function jsonError(code, message, details) {
     }
   };
 
-  if (details !== undefined) {
-    error.error.details = details;
-  }
+  const adjUrls = DriveService.saveBatchBase64_(
+    { sede: p.Sede, tipo: SHEET_NAMES.FXP, fecha: p.Fecha, turno: p.Turno },
+    p.AdjFXP
+  );
 
   return createJsonResponse_(error);
 }
 
-function parsePayload_(e) {
-  if (!e) {
-    return {};
-  }
+  const rowIdx = SheetsService.appendRowsDetectingHeaders_(SHEET_NAMES.FXP, rows);
 
-  if (e.postData && e.postData.contents) {
-    const type = String(e.postData.type || '').toLowerCase();
-    const contents = e.postData.contents;
+  try {
+    SupabaseService.insertMany_('fxp', rows.map(r => ({
+      id: Utilities.getUuid(),
+      fecha: r.Fecha, sede: r.Sede, turno: r.Turno,
+      encargado: r.Encargado, observaciones: r.Observaciones,
+      proveedor: r.Proveedor, num_factura: r.NumFactura,
+      valor: r.ValorFactura, categoria: r.Categoria, adjuntos: r.Adjuntos
+    })));
+  } catch (err) { log_('SUPABASE_FXP_ERROR', meta, { err: String(err) }); }
 
-    if (type.indexOf('application/json') !== -1) {
-      try {
-        return JSON.parse(contents);
-      } catch (error) {
-        throw new Error('JSON inválido en la petición');
-      }
+  log_('FXP_INSERTADAS', meta, { count: rows.length });
+  return { ok: true, sheet: SHEET_NAMES.FXP, rowIdx };
+}
+
+/** ───────── Sheets utils ───────── */
+
+const SheetsService = {
+  appendRowsDetectingHeaders_: function (sheetName, rows) {
+    if (!rows || !rows.length) throw new Error('No hay filas a insertar');
+    const ss = SpreadsheetApp.openById(SHEET_ID);
+    const sh = ss.getSheetByName(sheetName);
+    if (!sh) {
+      throw new Error('La hoja "' + sheetName + '" no existe en el Spreadsheet configurado');
     }
 
-    const trimmed = contents.trim();
-    if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
-      try {
-        return JSON.parse(trimmed);
-      } catch (error) {
-        throw new Error('JSON inválido en la petición');
-      }
+    const { header, headerMap, normMap } = getHeaderMapStrict_(sh);
+    if (!header.length || header.every(h => !String(h || '').trim())) {
+      throw new Error('La hoja "' + sheetName + '" no tiene encabezados definidos');
     }
-  }
 
-  if (e.parameter) {
-    const out = {};
-    Object.keys(e.parameter).forEach(key => {
-      out[key] = e.parameter[key];
+    const alias = getAliasForSheetName_(sheetName);
+    const data = rows.map(r => {
+      const arr = Array(header.length).fill('');
+      Object.keys(r || {}).forEach(k => {
+        const value = r[k];
+        const targetHeader = alias[k];
+        if (targetHeader !== undefined && headerMap[targetHeader] !== undefined) {
+          arr[headerMap[targetHeader]] = value;
+          return;
+        }
+        const guessIdx = normMap[_norm_(k)];
+        if (guessIdx !== undefined) {
+          arr[guessIdx] = value;
+        }
+      });
+      return arr;
     });
-    return out;
+
+    const startRow = Math.max(2, sh.getLastRow() + 1);
+    sh.getRange(startRow, 1, data.length, header.length).setValues(data);
+    return startRow;
+  }
+};
+
+function getHeaderMapStrict_(sh) {
+  const rng = sh.getDataRange();
+  const values = rng.getValues();
+  if (!values.length) {
+    return { header: [], headerMap: {}, normMap: {}, values: [] };
   }
 
-  return {};
-}
-
-function requireFields_(object, fields) {
-  fields.forEach(field => {
-    if (object[field] === undefined || object[field] === null || String(object[field]) === '') {
-      throw new Error('Campo requerido faltante: ' + field);
-    }
-  });
-}
-
-function toNumber_(value) {
-  const num = Number(value);
-  if (Number.isNaN(num)) {
-    throw new Error('Valor numérico inválido: ' + value);
+  const header = (values[0] || []).map(x => String(x || ''));
+  if (header.every(h => !String(h || '').trim())) {
+    return { header: [], headerMap: {}, normMap: {}, values };
   }
-  return num;
+  const headerMap = {};
+  header.forEach((h, i) => { headerMap[h] = i; });
+  const normMap = {};
+  header.forEach((h, i) => { normMap[_norm_(h)] = i; });
+
+  return { header, headerMap, normMap, values };
 }
 
 function sumByCriteria_(sheet, options) {
