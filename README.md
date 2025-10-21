@@ -1,16 +1,16 @@
 # Backend Cierre de Caja – PanPanocha (Apps Script)
 
 Este backend gestiona la **operación diaria de cierre de caja** en las sedes del restaurante PanPanocha.  
-El objetivo es centralizar los datos de **ventas**, **gastos** y **nómina por turno**, para obtener automáticamente el **saldo real en efectivo** y generar reportes diarios consolidados.
+El objetivo es centralizar los datos de **ventas**, **gastos**, **facturas x pagar** y **nómina por turno**, para que todos los sistemas pos **MysInventarios** y **Siigo**, con el proposito de una visualizacion y analisis mas optimo.
 
 ---
 
 ## 🧩 Objetivos principales
 
-1. Automatizar el flujo de **cierres diarios de caja** (dos por día: Turno #1 y Turno #2).
-2. Registrar y descontar correctamente **gastos** y **nómina** del efectivo recibido.
+1. Automatizar el flujo de **cierres diarios de caja**
+2. Registrar y descontar correctamente **gastos** y **nómina** del los cobros en efectivo..
 3. Asegurar que los datos de cada turno no afecten los cálculos del otro.
-4. Sincronizar toda la información en **Google Sheets**.
+4. Sincronizar toda la información en **Google Sheets** y **Supabase**
 5. Permitir consultas o reportes vía endpoint (doGet/doPost).
 6. Estar conectado a un frontend (web app o formulario) desarrollado en HTML/JS o Flutter, que envía los datos al backend mediante `fetch` o `axios`.
 
